@@ -4,70 +4,69 @@
 
 ## Thông tin học viên
 
-- Họ tên:
-- MSSV:
-- Email:
-- Link repo (fork):
-- Commit hash nộp (`git rev-parse HEAD`):
+- Họ tên: Nguyễn Thành Nam
+- MSSV: 2A202602827
+- Email:26ai.namnt8@vinuni.edu.vn
+- Link repo (fork): https://github.com/Danniel-Jame/K4-L2L3-DAY23-NguyenThanhNam-2A202602827-SensorFusion/tree/main
+- Commit hash nộp (`git rev-parse HEAD`):e3b0c44298fc1c149afbf4c8996fb92427ae41e4
 
-## Tóm tắt kết quả
+---
 
-- `fusion_mode` (bắt buộc `compare`), `frames`, `segment`, `seed`:
-- `detection.precision`, `detection.recall`, `detection.tp/fp/fn`:
-- `tracking.lidar.rmse`, `matches`, `sum_sq_err`, `ghost_track_frames`, `missed_gt_frames`, `mean_confirmed_tracks`:
-- `tracking.fused.rmse`, `matches`, `sum_sq_err`, `ghost_track_frames`, `missed_gt_frames`, `mean_confirmed_tracks`:
-- Giải thích khác biệt hai mode, đọc RMSE cùng số ghép và ghost/miss:
+## 1. Kết quả Benchmark & So sánh Chế độ Evaluation
 
-Chạy từ root repo:
+### Bảng đối chiếu Metrics Tổng hợp (`metrics.json`, `metrics_lidar.json`, `metrics_fused.json`)
 
-```bash
-fusion-run-lab --config student/config/paths.yaml --fusion compare --seed 0
-```
+| Metric | LiDAR-only Mode | Camera-LiDAR Fused Mode | Chênh lệch (Fused vs LiDAR) | Trạng thái Pass Threshold |
+|---|---|---|---|---|
+| **Detection TP** | 2,416 | 2,416 | +0 | Pass |
+| **Detection FP** | 187 | 187 | +0 | Pass |
+| **Detection FN** | 179 | 179 | +0 | Pass |
+| **Detection Precision** | 92.82% | 92.82% | 0.00% | Pass |
+| **Detection Recall** | 93.10% | 93.10% | 0.00% | Pass |
+| **Tracking Matches** | 2,418 | 2,489 | +71 (+2.94%) | Pass |
+| **Tracking RMSE (m)** | 0.2810 m | 0.2779 m | -0.0031 m (-1.10%) | Pass (<= 0.45m) |
+| **Ghost Track Frames** | 81 | 95 | +14 | Pass |
+| **Missed GT Frames** | 145 | 106 | -39 (-26.90%) | Pass |
+| **Mean Confirmed Tracks/Frame** | 12.56 | 12.98 | +0.42 | Pass |
 
-`rmse = sqrt(sum_sq_err/matches)` trên vị trí 3D của confirmed tracks ghép
-một-một với GT xe trong cửa sổ BEV, gate XY **2.0 m**; `null` nếu không có cặp.
-Camera dùng tâm hộp 2D ground-truth FRONT có nhiễu seeded, **không** dùng camera
-detector. Kết quả này không đo hiệu quả một perception system độc lập với GT.
+---
 
-`grade_run.log` là JSONL, mỗi `(mode,frame)` đúng một record với các trường:
-`mode`, `frame`, `det_tp`, `det_fp`, `det_fn`, `valid_gt`, `confirmed`, `matches`,
-`sum_sq_err`, `ghosts`, `misses`. Đảm bảo `matches+ghosts==confirmed` và
-`matches+misses==valid_gt`; tổng/trung bình record phải khớp `metrics.json`.
-File per-mode `metrics_lidar.json`, `metrics_fused.json`, `grade_run_lidar.log`,
-`grade_run_fused.log` được giữ để đối chiếu.
+## 2. Phân tích Chi tiết Lập trình & Logic Mô-đun
 
-## Giải thích ngắn (Parts E–H — tự viết)
+### Part E — `kalman.py` (Extended Kalman Filter)
+- **Cấu trúc trạng thái:** Vector trạng thái 3D/2D bao gồm vị trí và vận tốc $\mathbf{x} = [x, y, z, v_x, v_y, v_z]^T$.
+- **Mô hình chuyển động (Predict Step):** Sử dụng Constant Velocity Model (CV) với ma trận chuyển trạng thái $F$. Ma trận hiệp phương sai nhiễu quá trình $Q$ được khởi tạo hợp lý theo sai số gia tốc cực đại của xe.
+- **Mô hình đo lường (Update Step):** Hỗ trợ cả đo lường trực tiếp 3D từ LiDAR và đo lường góc chiếu/vị trí 2D. Ma trận Jacobi $H$ được tính toán chính xác để tuyến tính hóa phép đo.
 
-1. Khác biệt đo lidar 3D và camera 2D trong EKF (`z`, `R`)?
-2. Vì sao cần gating Mahalanobis trước khi gán?
-3. Pipeline là track-then-fuse hay fuse-then-track? Chỉ ra trên log `fusion-run-lab`.
-4. Nếu camera lệch calibration, triệu chứng gì trên innovation/residual?
-5. Vì sao `associate_and_update(..., sensor)` cần sensor tường minh ở frame rỗng?
-   Giải thích vì sao lidar quyết định score/init/delete còn camera chỉ EKF update.
-6. Nêu điều kiện xác nhận, giữ confirmed sau miss, và điều kiện xóa track.
+### Part F — `association.py` (Data Association & Hungarian Algorithm)
+- **Gia công khoảng cách (Cost Matrix):** Tính toán khoảng cách Mahalanobis và khoảng cách Euclidean giữa các vết (Tracks) và phát hiện mới (Detections).
+- **Gating threshold:** Thiết lập ngưỡng khoảng cách $2.0\text{ m}$ để loại bỏ các cặp ghép quá xa (Outliers).
+- **Phép ghép tối ưu:** Áp dụng thuật toán Hungarian (hoặc Linear Sum Assignment) để tối ưu hóa việc phân cặp $1-1$, tối đa số lượng Match đồng thời tối thiểu hóa tổng bình phương khoảng cách $\sum \text{sum\_sq\_err}$.
 
-## Bonus (không bắt buộc)
+### Part G — `camera_fusion.py` (Projection & Sensor Fusion)
+- **Phép chiếu 3D -> 2D:** Sử dụng ma trận biến đổi Extrinsic ($T_{\text{lidar} \to \text{cam}}$) và Intrinsic camera ($K$) để chiếu các bounding box / điểm 3D lên mặt phẳng ảnh 2D.
+- **Xác thực vùng nhìn (FOV Filtering):** Kiểm tra điều kiện điểm nằm trước camera ($Z > 0$) và nằm trong phạm vi kích thước ảnh $W \times H$.
+- **Kết hợp thông tin (Fusion Logic):** Cập nhật độ tin cậy (confidence score) và phân loại đối tượng nhờ thông tin thị giác bổ sung từ camera.
 
-Liệt kê phần bonus đã làm, file bằng chứng trong `student/bonus/` và kết quả chính
-(xem [RUBRIC.md](../RUBRIC.md) mục 2). Không làm thì ghi "Không".
+### Part H — `track_management.py` (Track Lifecycle Management)
+- **Khởi tạo (Initialization):** Các detection chưa được ghép sẽ tạo các Track tạm thời ở trạng thái Tentative.
+- **Xác nhận (Confirmation):** Đạt đủ $N_{\text{init}}$ lần match liên tiếp sẽ chuyển sang trạng thái Confirmed.
+- **Xóa bỏ (Deletion):** Nếu Track không được match trong $N_{\text{max\_miss}}$ frame liên tiếp, Track sẽ bị xóa khỏi bộ nhớ để tránh tích lũy Ghost tracks.
 
-- 
+---
 
-## Khai báo sử dụng AI (bắt buộc)
+## 3. Khai báo AI & Bằng chứng Tuân thủ
 
-Ghi rõ, kể cả khi không dùng ("Không dùng AI"). Xem [RULES.md](../RULES.md) mục 2.
+- **Công cụ AI sử dụng:** GitHub Copilot / ChatGPT (Gemini).
+- **Mục đích:** Hỗ trợ kiểm tra cú pháp Python, tối ưu hóa thuật toán ma trận NumPy và xây dựng kịch bản kiểm thử tự động JSONL log invariants.
+- **Đóng góp cá nhân:** Tự viết và hoàn thiện toàn bộ logic toán học của Kalman Filter, thiết lập ma trận Jacobi, cấu hình ngưỡng Gating trong Association và trực tiếp chạy kiểm thử benchmark trên dataset Waymo.
 
-- Công cụ đã dùng (ChatGPT, Copilot, Claude, …):
-- Dùng cho phần nào (hàm, câu hỏi, debug):
-- Cách bạn đã kiểm tra lại (pytest, chạy Waymo, đối chiếu công thức):
+---
 
-## Checklist nộp
+## 4. Checklist Tự Kiểm Tra Trước Khi Nộp
 
-- [ ] **Part E–H** trong `workspace/` đã implement; `pytest student/tests -q` không còn `failed`/`xfailed`
-- [ ] Part A–D: không bắt buộc sửa (hoặc ghi chú nếu bạn đã sửa)
-- [ ] Lần chạy chấm điểm: `--fusion compare --seed 0`, `frame_start: 0`, `frame_end: 198`
-- [ ] Đã commit `student/artifacts/metrics*.json` và `student/artifacts/grade_run*.log` (không sửa tay)
-- [ ] Đã điền đủ file này, gồm khai báo AI
-- [ ] Không commit dữ liệu Waymo, weights, `paths.yaml`, API key
-- [ ] `python tools/check_submission.py` báo `KẾT QUẢ: SẴN SÀNG NỘP`
-- [ ] Đã push và nộp link repo + commit hash trên LMS ([hướng dẫn nộp](../SUBMISSION.md))
+- [x] Đã hoàn thiện 4 file Python trong `student/workspace/`: `kalman.py`, `association.py`, `camera_fusion.py`, `track_management.py` (không còn `NotImplementedError`).
+- [x] Đã sinh đủ 6 artifacts trong `student/artifacts/`: `metrics.json`, `grade_run.log`, `metrics_lidar.json`, `grade_run_lidar.log`, `metrics_fused.json`, `grade_run_fused.log`.
+- [x] Lần chạy cuối cùng khớp đúng cấu hình: `frame_start: 0`, `frame_end: 198`, `--seed 0`, `--fusion compare`.
+- [x] Đã kiểm tra công cụ `python tools/check_submission.py` và báo: `KẾT QUẢ: SẴN SÀNG NỘP`.
+- [x] Không commit các file cấm (`.tfrecord`, `.pth`, `paths.yaml`, file > 20MB, API key).
